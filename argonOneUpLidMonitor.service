@@ -1,0 +1,12 @@
+[Unit]
+Description=Monitor when the lid of the Argon40 One Up laptop is closed and shutdown after a configured timeout.
+
+[Service]
+Type=forking
+PIDFile=/run/argonOneUpLidMonitor.pid
+ExecStart=/usr/local/bin/argonOneUpLidMonitor --daemon --pidfile /run/argonOneUpLidMonitor.pid
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
