@@ -13,8 +13,8 @@ This program uses features from the C++ 23 standard. You will need a compiler th
 
 This project uses the following libraries. You will need to install the developer packages to compile all the programs.
 
-* libbsd
 * libgpiod
+* libsystemd
 
 It uses pkg-config to find these libraries.
 
@@ -22,7 +22,7 @@ It uses pkg-config to find these libraries.
 
 Use the following command to install the required libraries.
 
-    sudo apt install libbsd-dev libgpiod-dev
+    sudo apt install libgpiod-dev
 
 ## Build
 
@@ -38,9 +38,7 @@ This project uses CMake. To build
 
 Usage: argonOneUpLidMonitor
 
-    --daemon,-d - start in the background as a daemon
     --help,-h - print usage and exit
-    --pidfile,-p <pidfile> - create and lock PID file
     --shutdownCommand,-s <command> - command to execute when lid has been closed for the configured number of seconds (default: "shutdown -h now")
 
 The shutdown command defaults to `shutdown -h now`. This is the same command as used by the Argon40 python script available for the One Up. This can be changed in the service file. For example
@@ -52,6 +50,7 @@ The shutdown command defaults to `shutdown -h now`. This is the same command as 
 To use this monitor you will need to install the provided systemd service file.
 
     sudo cp argonOneUpLidMonitor.service /etc/systemd/system/
+    sudo systemctl daemon-reload
     sudo systemctl start argonOneUpLidMonitor.service
     sudo systemctl enable argonOneUpLidMonitor.service
 
@@ -72,3 +71,8 @@ It looks for an line in the configuration file as follows. In this example the t
 
     lidshutdownsecs=300
 
+## Changelog
+
+| **Version** | **Changes** |
+|:-----------:|:----------- |
+| 1.0.0 | <ul><li>Encapsulated monitor into a class</li><li>Removed use of libbsd.</li><li>No longer forks and so is a service type simple.</li></ul> |

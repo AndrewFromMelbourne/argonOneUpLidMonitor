@@ -26,307 +26,36 @@
 //-------------------------------------------------------------------------
 
 #include <errno.h>
-#include <fcntl.h>
 #include <getopt.h>
 #include <syslog.h>
 #include <unistd.h>
 
-#include <bsd/libutil.h>
+#include <systemd/sd-journal.h>
 
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/types.h>
-
+#include <atomic>
 #include <chrono>
-#include <csignal>
 #include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <map>
+#include <print>
 #include <ranges>
 #include <regex>
 #include <string>
 #include <string_view>
 
-#include <gpiod.hpp>
+#include "argonOneUpLidMonitor.h"
+#include "config.h"
 
 //-------------------------------------------------------------------------
 
 using namespace std::chrono_literals;
-using pidFile_ptr = std::unique_ptr<pidfh, decltype(&pidfile_remove)>;
 
-//-------------------------------------------------------------------------
+//=========================================================================
 
 namespace
 {
-static std::string s_hostname{"localhost"};
-static bool s_isDaemon{false};
-static std::string s_pidFile{};
-static std::string s_programName{};
-volatile static std::sig_atomic_t s_run{1};
-static std::string s_shutdownCommand{"shutdown -h now"};
-}
-
-//-------------------------------------------------------------------------
-
-enum class LidAction
-{
-    UNKNOWN,
-    OPENED,
-    CLOSED
-};
-
-//-------------------------------------------------------------------------
-
-void
-messageLog(
-    int priority,
-    const std::string& message)
-{
-    if (s_isDaemon)
-    {
-        ::syslog(LOG_MAKEPRI(LOG_USER, priority), "%s", message.c_str());
-    }
-    else
-    {
-        const auto now = floor<std::chrono::seconds>(std::chrono::system_clock::now());
-        const auto localTime = std::chrono::current_zone()->to_local(now);
-
-        std::print(std::cerr, "{:%b %e %T} ", localTime);
-        std::print(std::cerr, "{} ", s_hostname);
-        std::print(std::cerr, "{}[{}]:", s_programName, getpid());
-
-        const static std::map<int, std::string> priorityMap
-        {
-            { LOG_EMERG, "emergency" },
-            { LOG_ALERT, "alert" },
-            { LOG_CRIT, "critical" },
-            { LOG_ERR, "error" },
-            { LOG_WARNING, "warning" },
-            { LOG_NOTICE, "notice" },
-            { LOG_INFO, "info" },
-            { LOG_DEBUG, "debug" }
-        };
-
-        if (const auto it = priorityMap.find(priority); it != priorityMap.end())
-        {
-            std::print(std::cerr, "{}", it->second);
-        }
-        else
-        {
-            std::print(std::cerr, "unknown({})", priority);
-        }
-
-        std::println(std::cerr, ":{}", message);
-    }
-}
-
-//-------------------------------------------------------------------------
-
-LidAction
-eventTypeToLidAction(
-    gpiod::edge_event::event_type eventType)
-{
-    switch (eventType)
-    {
-        case gpiod::edge_event::event_type::RISING_EDGE:
-            return LidAction::OPENED;
-        case gpiod::edge_event::event_type::FALLING_EDGE:
-            return LidAction::CLOSED;
-        default:
-            return LidAction::UNKNOWN;
-    }
-}
-
-//-------------------------------------------------------------------------
-
-std::string
-toString(
-    LidAction action)
-{
-    switch (action)
-    {
-        case LidAction::OPENED:
-            return "opened";
-        case LidAction::CLOSED:
-            return "closed";
-        default:
-            return "unknown";
-    }
-}
-
-//-------------------------------------------------------------------------
-
-void
-perrorLog(
-    const std::string& s)
-{
-    messageLog(LOG_ERR, s + " - " + ::strerror(errno));
-}
-
-//-------------------------------------------------------------------------
-
-void
-printUsage(
-    std::ostream& stream)
-{
-    std::println(stream, "");
-    std::println(stream, "Usage: {}", s_programName);
-    std::println(stream, "");
-    std::println(stream, "    --daemon,-d - start in the background as a daemon");
-    std::println(stream, "    --help,-h - print usage and exit");
-    std::println(stream, "    --pidfile,-p <pidfile> - create and lock PID file");
-    std::println(stream, "    --shutdownCommand,-s <command> - command to execute when lid has been closed for the configured number of seconds (default: \"{}\")", s_shutdownCommand);
-    std::println(stream, "");
-}
-
-//-------------------------------------------------------------------------
-
-void
-parseCommandLine(
-    int argc,
-    char* argv[])
-{
-    static const char* sopts = "dhp:s:";
-    static option lopts[] =
-    {
-        { "daemon", no_argument, nullptr, 'd' },
-        { "help", no_argument, nullptr, 'h' },
-        { "pidfile", required_argument, nullptr, 'p' },
-        { "shutdownCommand", required_argument, nullptr, 's' },
-        { nullptr, no_argument, nullptr, 0 }
-    };
-
-    int opt{0};
-
-    while ((opt = ::getopt_long(argc, argv, sopts, lopts, nullptr)) != -1)
-    {
-        switch (opt)
-        {
-        case 'd':
-
-            s_isDaemon = true;
-            break;
-
-        case 'h':
-
-            printUsage(std::cout);
-            ::exit(EXIT_SUCCESS);
-            break;
-
-        case 'p':
-
-            s_pidFile = optarg;
-            break;
-
-        case 's':
-
-            s_shutdownCommand = optarg;
-            break;
-
-        default:
-
-            printUsage(std::cerr);
-            ::exit(EXIT_FAILURE);
-            break;
-        }
-    }
-}
-
-//-------------------------------------------------------------------------
-
-std::string
-getHostname()
-{
-    char hostname[256];
-    if (::gethostname(hostname, sizeof(hostname)) == 0)
-    {
-        return hostname;
-    }
-    else
-    {
-        perrorLog("Error getting hostname");
-        return "localhost";
-    }
-}
-
-//-------------------------------------------------------------------------
-
-static void
-signalHandler(
-    int signalNumber) noexcept
-{
-    switch (signalNumber)
-    {
-    case SIGINT:
-    case SIGTERM:
-
-        s_run = 0;
-        break;
-    };
-}
-
-//-------------------------------------------------------------------------
-
-void
-setSignalHandler()
-{
-    for (auto signal : { SIGINT, SIGTERM })
-    {
-        if (std::signal(signal, signalHandler) == SIG_ERR)
-        {
-            messageLog(
-                LOG_ERR,
-                std::format(
-                    "Error: installing {} signal handler : {}",
-                    strsignal(signal),
-                    strerror(errno)));
-
-            ::exit(EXIT_FAILURE);
-        }
-    }
-}
-
-//-------------------------------------------------------------------------
-
-pidFile_ptr
-daemonize()
-{
-    pidFile_ptr pfh{nullptr, &pidfile_remove};
-
-    if (not s_pidFile.empty())
-    {
-        pid_t otherpid;
-        pfh.reset(::pidfile_open(s_pidFile.c_str(), 0600, &otherpid));
-
-        if (not pfh)
-        {
-            messageLog(
-                LOG_ERR,
-                std::format(
-                    "{} is already running with pid {}",
-                    s_programName,
-                    otherpid));
-            ::exit(EXIT_FAILURE);
-        }
-    }
-
-    if (::daemon(0, 0) == -1)
-    {
-        messageLog(LOG_ERR, "Cannot daemonize");
-        ::exit(EXIT_FAILURE);
-    }
-
-    if (pfh)
-    {
-        ::pidfile_write(pfh.get());
-    }
-
-    return pfh;
-}
-
-//-------------------------------------------------------------------------
 
 std::string_view
 trim(const std::string_view str)
@@ -343,10 +72,61 @@ trim(const std::string_view str)
     return str.substr(start - str.begin(), end.base() - start);
 }
 
+
+//-------------------------------------------------------------------------
+
+} // namespace
+
+//=========================================================================
+
+ArgonOneUpLidMonitor::ArgonOneUpLidMonitor(
+    std::atomic<bool>* run)
+:
+    m_hostname(getHostname()),
+    m_programName(),
+    m_run(run),
+    m_shutdownCommand("shutdown -h now")
+{
+}
+
+//-------------------------------------------------------------------------
+
+ArgonOneUpLidMonitor::LidAction
+ArgonOneUpLidMonitor::eventTypeToLidAction(
+    gpiod::edge_event::event_type eventType)
+{
+    switch (eventType)
+    {
+        case gpiod::edge_event::event_type::RISING_EDGE:
+            return LidAction::OPENED;
+        case gpiod::edge_event::event_type::FALLING_EDGE:
+            return LidAction::CLOSED;
+        default:
+            return LidAction::UNKNOWN;
+    }
+}
+
+//-------------------------------------------------------------------------
+
+std::string
+ArgonOneUpLidMonitor::getHostname()
+{
+    char hostname[256];
+    if (::gethostname(hostname, sizeof(hostname)) == 0)
+    {
+        return hostname;
+    }
+    else
+    {
+        perrorLog("cannot get hostname");
+        return "localhost";
+    }
+}
+
 //-------------------------------------------------------------------------
 
 std::chrono::seconds
-getShutdownTimeout()
+ArgonOneUpLidMonitor::getShutdownTimeout()
 {
     std::filesystem::path config("/etc/argononeupd.conf");
 
@@ -386,7 +166,7 @@ getShutdownTimeout()
                     {
                         messageLog(
                             LOG_ERR,
-                            std::format("Error parsing shutdown_timeout: {}", e.what()));
+                            std::format("cannot parse shutdown_timeout: {}", e.what()));
                         return 0s;
                     }
                 }
@@ -400,8 +180,12 @@ getShutdownTimeout()
 //-------------------------------------------------------------------------
 
 void
-lidMonitor()
+ArgonOneUpLidMonitor::lidMonitor()
 {
+    messageLog(
+        LOG_INFO,
+        std::format("starting - shutdown command is \"{}\"", m_shutdownCommand));
+
     auto shutdownTimeout = getShutdownTimeout();
     std::chrono::steady_clock::time_point lidClosedTime;
     LidAction action = LidAction::UNKNOWN;
@@ -421,7 +205,7 @@ lidMonitor()
 
     auto lineConfig = request.do_request();
 
-    while (s_run)
+    while (*m_run)
     {
         if (lineConfig.wait_edge_events(1s))
         {
@@ -453,7 +237,7 @@ lidMonitor()
                         "lid has been closed for {} seconds, shutting down",
                         shutdownTimeout.count()));
 
-                ::system(s_shutdownCommand.c_str());
+                ::system(m_shutdownCommand.c_str());
                 break;
             }
         }
@@ -462,47 +246,142 @@ lidMonitor()
 
 //-------------------------------------------------------------------------
 
-int
-main(
-    int argc,
-    char *argv[])
+void
+ArgonOneUpLidMonitor::messageLog(
+    int priority,
+    std::string_view message) const
 {
-    s_hostname = getHostname();
-    s_programName = std::filesystem::path(argv[0]).filename().string();
-
-    //---------------------------------------------------------------------
-
-    parseCommandLine(argc, argv);
-
-    //---------------------------------------------------------------------
-
-    pidFile_ptr pfh{nullptr, &pidfile_remove};
-
-    if (s_isDaemon)
+    if (getenv("JOURNAL_STREAM") != nullptr)
     {
-        ::openlog(s_programName.c_str(), LOG_PID, LOG_USER);
-        pfh = daemonize();
+        std::string messageStr(message);
+        sd_journal_print(priority, "%s", messageStr.c_str());
+    }
+    else
+    {
+        const auto now = floor<std::chrono::seconds>(std::chrono::system_clock::now());
+        const auto localTime = std::chrono::current_zone()->to_local(now);
+
+        std::print(std::cerr, "{:%b %e %T} ", localTime);
+        std::print(std::cerr, "{} ", m_hostname);
+        std::print(std::cerr, "{}[{}]:", m_programName, getpid());
+
+        const static std::map<int, std::string> priorityMap
+        {
+            { LOG_EMERG, "emergency" },
+            { LOG_ALERT, "alert" },
+            { LOG_CRIT, "critical" },
+            { LOG_ERR, "error" },
+            { LOG_WARNING, "warning" },
+            { LOG_NOTICE, "notice" },
+            { LOG_INFO, "info" },
+            { LOG_DEBUG, "debug" }
+        };
+
+        if (const auto it = priorityMap.find(priority); it != priorityMap.end())
+        {
+            std::print(std::cerr, "{}", it->second);
+        }
+        else
+        {
+            std::print(std::cerr, "unknown({})", priority);
+        }
+
+        std::println(std::cerr, ":{}", message);
+    }
+}
+
+//-------------------------------------------------------------------------
+
+std::optional<int>
+ArgonOneUpLidMonitor::parseCommandLine(
+    int argc,
+    char* argv[])
+{
+    m_programName = std::filesystem::path(argv[0]).filename().string();
+
+    static const char* sopts = "hs:";
+    static option lopts[] =
+    {
+        { "help", no_argument, nullptr, 'h' },
+        { "shutdownCommand", required_argument, nullptr, 's' },
+        { nullptr, no_argument, nullptr, 0 }
+    };
+
+    int opt{0};
+
+    while ((opt = ::getopt_long(argc, argv, sopts, lopts, nullptr)) != -1)
+    {
+        switch (opt)
+        {
+        case 'h':
+
+            printUsage(std::cout);
+            return EXIT_SUCCESS;
+            break;
+
+        case 's':
+
+            m_shutdownCommand = optarg;
+            break;
+
+        default:
+
+            printUsage(std::cerr);
+            return EXIT_FAILURE;
+            break;
+        }
     }
 
-    //---------------------------------------------------------------------
+    return std::nullopt;
+}
 
-    setSignalHandler();
+//-------------------------------------------------------------------------
 
-    //---------------------------------------------------------------------
-
-    messageLog(
-        LOG_INFO,
-        std::format("starting - shutdown command is \"{}\"", s_shutdownCommand));
-
-    try
+void
+ArgonOneUpLidMonitor::perrorLog(
+    std::string_view s) const
+{
+    if (getenv("JOURNAL_STREAM") != nullptr)
     {
-        lidMonitor();
+        sd_journal_perror(std::string(s).c_str());
     }
-    catch(const std::exception& e)
+    else
     {
-        messageLog(LOG_ERR, std::format("Error:{}", e.what()));
+        messageLog(LOG_ERR, std::string(s) + " - " + ::strerror(errno));
     }
+}
 
-    messageLog(LOG_INFO, "exiting");
+//-------------------------------------------------------------------------
+
+void
+ArgonOneUpLidMonitor::printUsage(
+    std::ostream& stream) const
+{
+    std::println(stream, "");
+    std::println(stream, "Usage: {}", m_programName);
+    std::println(stream, "");
+    std::println(stream, "    --help,-h - print usage and exit");
+    std::println(stream, "    --shutdownCommand,-s <command> - command to execute when lid has been closed for the configured number of seconds (default: \"{}\")", m_shutdownCommand);
+    std::println(stream, "");
+    std::println(stream, "Version: {}", c_projectVersion);
+    std::println(stream, "Git commit hash: {}", c_gitCommitHash);
+    std::println(stream, "");
+}
+
+//-------------------------------------------------------------------------
+
+std::string
+ArgonOneUpLidMonitor::toString(
+    LidAction action)
+{
+    switch (action)
+    {
+        case LidAction::OPENED:
+            return "opened";
+        case LidAction::CLOSED:
+            return "closed";
+        default:
+            return "unknown";
+    }
 }
 
