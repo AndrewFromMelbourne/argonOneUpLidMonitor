@@ -58,7 +58,8 @@ namespace
 {
 
 std::string_view
-trim(const std::string_view str)
+trim(
+    const std::string_view str)
 {
     auto isSpace = [](char c) { return std::isspace(static_cast<unsigned char>(c)); };
 
