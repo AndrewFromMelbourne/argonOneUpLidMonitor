@@ -57,6 +57,8 @@ using namespace std::chrono_literals;
 namespace
 {
 
+//-------------------------------------------------------------------------
+
 std::string_view
 trim(
     const std::string_view str)
@@ -72,7 +74,6 @@ trim(
     const auto end = std::find_if_not(rbegin(str), rend(str), isSpace);
     return str.substr(start - str.begin(), end.base() - start);
 }
-
 
 //-------------------------------------------------------------------------
 
