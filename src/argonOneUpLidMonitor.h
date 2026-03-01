@@ -49,10 +49,10 @@ class ArgonOneUpLidMonitor
 {
 public:
 
-    enum class LidAction
+    enum class LidState
     {
         UNKNOWN,
-        OPENED,
+        OPEN,
         CLOSED
     };
 
@@ -63,11 +63,12 @@ public:
     std::optional<int> parseCommandLine(int argc, char* argv[]);
     void perrorLog(std::string_view s) const;
     [[nodiscard]] std::string programName() const noexcept { return m_programName; }
-        std::string toString(LidAction action);
+    std::string toString(LidState state);
 
 private:
 
-    static LidAction eventTypeToLidAction(gpiod::edge_event::event_type eventType);
+    static LidState eventTypeToLidState(gpiod::edge_event::event_type eventType);
+    static LidState valueTypeToLidState(gpiod::line::value valueType);
     std::string getHostname();
     std::chrono::seconds getShutdownTimeout();
     void printUsage(std::ostream& stream) const;

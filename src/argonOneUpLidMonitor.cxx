@@ -93,18 +93,35 @@ ArgonOneUpLidMonitor::ArgonOneUpLidMonitor(
 
 //-------------------------------------------------------------------------
 
-ArgonOneUpLidMonitor::LidAction
-ArgonOneUpLidMonitor::eventTypeToLidAction(
+ArgonOneUpLidMonitor::LidState
+ArgonOneUpLidMonitor::eventTypeToLidState(
     gpiod::edge_event::event_type eventType)
 {
     switch (eventType)
     {
         case gpiod::edge_event::event_type::RISING_EDGE:
-            return LidAction::OPENED;
+            return LidState::OPEN;
         case gpiod::edge_event::event_type::FALLING_EDGE:
-            return LidAction::CLOSED;
+            return LidState::CLOSED;
         default:
-            return LidAction::UNKNOWN;
+            return LidState::UNKNOWN;
+    }
+}
+
+//-------------------------------------------------------------------------
+
+ArgonOneUpLidMonitor::LidState
+ArgonOneUpLidMonitor::valueTypeToLidState(
+    gpiod::line::value valueType)
+{
+    switch (valueType)
+    {
+        case gpiod::line::value::ACTIVE:
+            return LidState::OPEN;
+        case gpiod::line::value::INACTIVE:
+            return LidState::CLOSED;
+        default:
+            return LidState::UNKNOWN;
     }
 }
 
@@ -190,7 +207,7 @@ ArgonOneUpLidMonitor::lidMonitor()
 
     auto shutdownTimeout = getShutdownTimeout();
     std::chrono::steady_clock::time_point lidClosedTime;
-    LidAction action = LidAction::UNKNOWN;
+    LidState state = LidState::UNKNOWN;
 
     const std::filesystem::path chipPath{"/dev/gpiochip4"};
     const gpiod::line::offset lineOffset{27};
@@ -206,6 +223,16 @@ ArgonOneUpLidMonitor::lidMonitor()
     request.add_line_settings(lineOffset, settings);
 
     auto lineConfig = request.do_request();
+    const auto value = lineConfig.get_value(lineOffset);
+state = valueTypeToLidState(value);
+
+    messageLog(LOG_INFO, std::format("lid {}", toString(state)));
+
+    if (state == LidState::CLOSED and shutdownTimeout > 0s)
+    {
+        lidClosedTime = std::chrono::steady_clock::now();
+    }
+
 
     while (*m_run)
     {
@@ -215,20 +242,20 @@ ArgonOneUpLidMonitor::lidMonitor()
             lineConfig.read_edge_events(buffer, 1);
             for (const auto& event : buffer)
             {
-                action = eventTypeToLidAction(event.type());
+                state = eventTypeToLidState(event.type());
 
                 messageLog(
                     LOG_INFO,
-                    std::format("lid {}", toString(action)));
+                    std::format("lid {}", toString(state)));
 
-                if (action == LidAction::CLOSED)
+                if (state == LidState::CLOSED)
                 {
                     shutdownTimeout = getShutdownTimeout();
                     lidClosedTime = std::chrono::steady_clock::now();
                 }
             }
         }
-        else if (action == LidAction::CLOSED and shutdownTimeout > 0s)
+        else if (state == LidState::CLOSED and shutdownTimeout > 0s)
         {
             const auto now = std::chrono::steady_clock::now();
             if (now - lidClosedTime >= shutdownTimeout)
@@ -374,13 +401,13 @@ ArgonOneUpLidMonitor::printUsage(
 
 std::string
 ArgonOneUpLidMonitor::toString(
-    LidAction action)
+    LidState state)
 {
-    switch (action)
+    switch (state)
     {
-        case LidAction::OPENED:
-            return "opened";
-        case LidAction::CLOSED:
+        case LidState::OPEN:
+            return "open";
+        case LidState::CLOSED:
             return "closed";
         default:
             return "unknown";
