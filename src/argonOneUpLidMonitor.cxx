@@ -224,7 +224,7 @@ ArgonOneUpLidMonitor::lidMonitor()
 
     auto lineConfig = request.do_request();
     const auto value = lineConfig.get_value(lineOffset);
-state = valueTypeToLidState(value);
+    state = valueTypeToLidState(value);
 
     messageLog(LOG_INFO, std::format("lid {}", toString(state)));
 
@@ -232,7 +232,6 @@ state = valueTypeToLidState(value);
     {
         lidClosedTime = std::chrono::steady_clock::now();
     }
-
 
     while (*m_run)
     {
@@ -413,4 +412,3 @@ ArgonOneUpLidMonitor::toString(
             return "unknown";
     }
 }
-
