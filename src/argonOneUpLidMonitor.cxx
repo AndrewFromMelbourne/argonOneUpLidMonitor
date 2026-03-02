@@ -34,11 +34,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <print>
 #include <ranges>
 #include <regex>
@@ -87,7 +90,8 @@ ArgonOneUpLidMonitor::ArgonOneUpLidMonitor(
     m_hostname(getHostname()),
     m_programName(),
     m_run(run),
-    m_shutdownCommand("shutdown -h now")
+    m_shutdownCommand("shutdown -h now"),
+    m_shutdownThread{}
 {
 }
 
@@ -127,6 +131,30 @@ ArgonOneUpLidMonitor::valueTypeToLidState(
 
 //-------------------------------------------------------------------------
 
+void
+ArgonOneUpLidMonitor::createShutdownThread()
+{
+    if (not m_shutdownThread.joinable())
+    {
+        auto function = std::bind_front(&ArgonOneUpLidMonitor::shutdownTimer, this);
+        m_shutdownThread = std::jthread(function);
+    }
+}
+
+//-------------------------------------------------------------------------
+
+void
+ArgonOneUpLidMonitor::destroyShutdownThread()
+{
+    if (m_shutdownThread.joinable())
+    {
+        m_shutdownThread.request_stop();
+        m_shutdownThread.join();
+    }
+}
+
+//-------------------------------------------------------------------------
+
 std::string
 ArgonOneUpLidMonitor::getHostname()
 {
@@ -149,46 +177,62 @@ ArgonOneUpLidMonitor::getShutdownTimeout()
 {
     std::filesystem::path config("/etc/argononeupd.conf");
 
-    if (std::filesystem::exists(config))
+    if (not std::filesystem::exists(config))
     {
-        std::ifstream ifs(config);
-        if (ifs.is_open())
+        messageLog(
+            LOG_INFO,
+            std::format(
+                "config file \"{}\" does not exist",
+                config.c_str()));
+
+        return 0s;
+    }
+
+    std::ifstream ifs(config);
+    if (not ifs.is_open())
+    {
+        messageLog(
+            LOG_INFO,
+            std::format(
+                "Unable to open config file \"{}\"",
+                config.c_str()));
+
+        return 0s;
+    }
+
+    std::string line;
+    while (std::getline(ifs, line))
+    {
+        line = trim(line);
+
+        if (line.starts_with("#") || line.empty())
         {
-            std::string line;
-            while (std::getline(ifs, line))
+            continue;
+        }
+
+        const std::regex pattern{R"(\s*lidshutdownsecs\s*=\s*(\d+))"};
+        std::smatch matches;
+        if (std::regex_search(line, matches, pattern))
+        {
+            try
             {
-                line = trim(line);
+                auto timeout = std::stoul(matches[1].str());
+                auto timeoutSeconds = std::chrono::seconds(timeout);
 
-                if (line.starts_with("#") || line.empty())
-                {
-                    continue;
-                }
+                messageLog(
+                    LOG_INFO,
+                    std::format(
+                        "shutdown timeout set to {:%M:%S} minutes:seconds",
+                        timeoutSeconds));
 
-                const std::regex pattern{R"(\s*lidshutdownsecs\s*=\s*(\d+))"};
-                std::smatch matches;
-                if (std::regex_search(line, matches, pattern))
-                {
-                    try
-                    {
-                        auto timeout = std::stoul(matches[1].str());
-                        auto timeoutSeconds = std::chrono::seconds(timeout);
-
-                        messageLog(
-                            LOG_INFO,
-                            std::format(
-                                "shutdown timeout set to {:%M:%S} minutes:seconds",
-                                timeoutSeconds));
-
-                        return timeoutSeconds;
-                    }
-                    catch (const std::exception& e)
-                    {
-                        messageLog(
-                            LOG_ERR,
-                            std::format("cannot parse shutdown_timeout: {}", e.what()));
-                        return 0s;
-                    }
-                }
+                return timeoutSeconds;
+            }
+            catch (const std::exception& e)
+            {
+                messageLog(
+                    LOG_ERR,
+                    std::format("cannot parse shutdown_timeout: {}", e.what()));
+                return 0s;
             }
         }
     }
@@ -201,13 +245,17 @@ ArgonOneUpLidMonitor::getShutdownTimeout()
 void
 ArgonOneUpLidMonitor::lidMonitor()
 {
+    messageLog(LOG_INFO, "starting");
+    messageLog(LOG_INFO, std::format("version: {}", c_projectVersion));
+    messageLog(LOG_INFO, std::format("git commmit hash: {}", c_gitCommitHash));
+
     messageLog(
         LOG_INFO,
-        std::format("starting - shutdown command is \"{}\"", m_shutdownCommand));
+        std::format("shutdown command is \"{}\"", m_shutdownCommand));
 
     auto shutdownTimeout = getShutdownTimeout();
-    std::chrono::steady_clock::time_point lidClosedTime;
-    LidState state = LidState::UNKNOWN;
+
+    //---------------------------------------------------------------------
 
     const std::filesystem::path chipPath{"/dev/gpiochip4"};
     const gpiod::line::offset lineOffset{27};
@@ -223,22 +271,29 @@ ArgonOneUpLidMonitor::lidMonitor()
     request.add_line_settings(lineOffset, settings);
 
     auto lineConfig = request.do_request();
+
+    //---------------------------------------------------------------------
+
     const auto value = lineConfig.get_value(lineOffset);
-    state = valueTypeToLidState(value);
+    auto state = valueTypeToLidState(value);
 
     messageLog(LOG_INFO, std::format("lid {}", toString(state)));
 
     if (state == LidState::CLOSED and shutdownTimeout > 0s)
     {
-        lidClosedTime = std::chrono::steady_clock::now();
+        createShutdownThread();
     }
+
+    //---------------------------------------------------------------------
 
     while (*m_run)
     {
-        if (lineConfig.wait_edge_events(1s))
+        constexpr auto blocking{-1s};
+        if (lineConfig.wait_edge_events(blocking))
         {
-            gpiod::edge_event_buffer buffer{1};
-            lineConfig.read_edge_events(buffer, 1);
+            constexpr auto eventsToRead{1};
+            gpiod::edge_event_buffer buffer{eventsToRead};
+            lineConfig.read_edge_events(buffer, eventsToRead);
             for (const auto& event : buffer)
             {
                 state = eventTypeToLidState(event.type());
@@ -249,27 +304,17 @@ ArgonOneUpLidMonitor::lidMonitor()
 
                 if (state == LidState::CLOSED)
                 {
-                    shutdownTimeout = getShutdownTimeout();
-                    lidClosedTime = std::chrono::steady_clock::now();
+                    createShutdownThread();
+                }
+                else if (state == LidState::OPEN)
+                {
+                    destroyShutdownThread();
                 }
             }
         }
-        else if (state == LidState::CLOSED and shutdownTimeout > 0s)
-        {
-            const auto now = std::chrono::steady_clock::now();
-            if (now - lidClosedTime >= shutdownTimeout)
-            {
-                messageLog(
-                    LOG_INFO,
-                    std::format(
-                        "lid has been closed for {} seconds, shutting down",
-                        shutdownTimeout.count()));
-
-                ::system(m_shutdownCommand.c_str());
-                break;
-            }
-        }
     }
+
+    destroyShutdownThread();
 }
 
 //-------------------------------------------------------------------------
@@ -411,4 +456,40 @@ ArgonOneUpLidMonitor::toString(
         default:
             return "unknown";
     }
+}
+
+//-------------------------------------------------------------------------
+
+void
+ArgonOneUpLidMonitor::shutdownTimer(
+    std::stop_token stopToken)
+{
+    const auto timeout = getShutdownTimeout();
+
+    if (timeout <= 0s)
+    {
+        return;
+    }
+
+    std::mutex mtx;
+    std::condition_variable_any cva;
+    std::unique_lock lock(mtx);
+    auto predictate = []{ return false; };
+
+    cva.wait_for(lock, stopToken, timeout, predictate);
+
+    if (stopToken.stop_requested())
+    {
+        messageLog(LOG_INFO, "shutdown cancelled");
+        return;
+    }
+
+    messageLog(
+        LOG_INFO,
+        std::format(
+            "lid has been closed for {:%M:%S} minutes:seconds",
+            timeout));
+    messageLog(LOG_INFO, "calling: " + m_shutdownCommand);
+
+    ::system(m_shutdownCommand.c_str());
 }

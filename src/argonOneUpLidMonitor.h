@@ -34,6 +34,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include <bsd/libutil.h>
 
@@ -69,14 +70,20 @@ private:
 
     static LidState eventTypeToLidState(gpiod::edge_event::event_type eventType);
     static LidState valueTypeToLidState(gpiod::line::value valueType);
+
+    void createShutdownThread();
+    void destroyShutdownThread();
+
     std::string getHostname();
     std::chrono::seconds getShutdownTimeout();
     void printUsage(std::ostream& stream) const;
+    void shutdownTimer(std::stop_token stopToken);
 
     std::string m_hostname{};
     std::string m_programName{};
     std::atomic<bool>* m_run{nullptr};
     std::string m_shutdownCommand{};
+    std::jthread m_shutdownThread{};
 };
 
 //-------------------------------------------------------------------------

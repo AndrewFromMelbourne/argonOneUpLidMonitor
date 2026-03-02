@@ -77,3 +77,4 @@ It looks for an line in the configuration file as follows. In this example the t
 |:-----------:|:----------- |
 | 1.0.0 | <ul><li>Encapsulated monitor into a class</li><li>Removed use of libbsd.</li><li>No longer forks and so is a service type simple.</li></ul> |
 | 1.0.1 | <ul><li>Read lid state from gpio at startup</li><li>Changed action closed/opened to state closed/open.</li></ul> |
+| 1.1.0 | <ul><li>Moved timer to separate thread</li><li>Using blocking calls for gpio changes and timer</li></ul> |
