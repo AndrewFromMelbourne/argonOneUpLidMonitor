@@ -22,7 +22,7 @@ It uses pkg-config to find these libraries.
 
 Use the following command to install the required libraries.
 
-    sudo apt install libgpiod-dev
+    sudo apt install libgpiod-dev libsystemd-dev
 
 ## Build
 
@@ -43,7 +43,7 @@ Usage: argonOneUpLidMonitor
 
 The shutdown command defaults to `shutdown -h now`. This is the same command as used by the Argon40 python script available for the One Up. This can be changed in the service file. For example
 
-    ExecStart=/usr/local/bin/argonOneUpLidMonitor --daemon --pidfile /run/argonOneUpLidMonitor.pid --shutdownCommand "poweroff"
+    ExecStart=/usr/local/bin/argonOneUpLidMonitor --shutdownCommand "poweroff"
 
 ## Systemd service
 
