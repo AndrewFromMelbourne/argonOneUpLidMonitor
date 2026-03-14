@@ -63,7 +63,7 @@ public:
     void messageLog(int priority, std::string_view message) const;
     std::optional<int> parseCommandLine(int argc, char* argv[]);
     void perrorLog(std::string_view s) const;
-    [[nodiscard]] std::string programName() const noexcept { return m_programName; }
+    [[nodiscard]] const std::string& programName() const noexcept { return m_programName; }
     std::string toString(LidState state);
 
 private:

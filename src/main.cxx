@@ -61,7 +61,7 @@ signalHandler(
 
 void
 setSignalHandler(
-    ArgonOneUpLidMonitor& monitor)
+    const ArgonOneUpLidMonitor& monitor)
 {
     for (auto signal : { SIGINT, SIGTERM })
     {

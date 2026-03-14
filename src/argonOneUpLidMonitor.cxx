@@ -69,13 +69,13 @@ trim(
     auto isSpace = [](char c) { return std::isspace(static_cast<unsigned char>(c)); };
 
     const auto start = std::find_if_not(begin(str), end(str), isSpace);
-    if (start == str.end())
+    if (start == end(str))
     {
         return {};
     }
 
-    const auto end = std::find_if_not(rbegin(str), rend(str), isSpace);
-    return str.substr(start - str.begin(), end.base() - start);
+    const auto finish = std::find_if_not(rbegin(str), rend(str), isSpace);
+    return str.substr(start - begin(str), finish.base() - start);
 }
 
 //-------------------------------------------------------------------------
@@ -350,7 +350,7 @@ ArgonOneUpLidMonitor::messageLog(
             { LOG_DEBUG, "debug" }
         };
 
-        if (const auto it = priorityMap.find(priority); it != priorityMap.end())
+        if (const auto it = priorityMap.find(priority); it != end(priorityMap))
         {
             std::print(std::cerr, "{}", it->second);
         }
