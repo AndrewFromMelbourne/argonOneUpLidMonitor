@@ -471,8 +471,21 @@ ArgonOneUpLidMonitor::shutdownTimer(
         return;
     }
 
+    /*
+     * The predictate always returns false so the wait_for will always
+     * timeout after the specified duration unless the stop token is
+     * requested.
+     *
+     * Using wait_for as an interruptible sleep to allow the shutdown
+     * to be cancelled if the lid is opened before the timeout expires.
+     * If the shutdown is cancelled then the function returns without
+     * calling the shutdown command. If the shutdown is not cancelled
+     * and the timeout expires then the shutdown command is called.
+     */
+
     std::mutex mtx;
     std::condition_variable_any cva;
+    // cppcheck-suppress [localMutex]
     std::unique_lock lock(mtx);
     auto predictate = []{ return false; };
 
