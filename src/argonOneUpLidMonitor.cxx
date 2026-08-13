@@ -156,7 +156,7 @@ ArgonOneUpLidMonitor::destroyShutdownThread()
 //-------------------------------------------------------------------------
 
 std::string
-ArgonOneUpLidMonitor::getHostname()
+ArgonOneUpLidMonitor::getHostname() const noexcept
 {
     char hostname[256];
     if (::gethostname(hostname, sizeof(hostname)) == 0)
@@ -173,7 +173,7 @@ ArgonOneUpLidMonitor::getHostname()
 //-------------------------------------------------------------------------
 
 std::chrono::seconds
-ArgonOneUpLidMonitor::getShutdownTimeout()
+ArgonOneUpLidMonitor::getShutdownTimeout() const noexcept
 {
     std::filesystem::path config("/etc/argononeupd.conf");
 

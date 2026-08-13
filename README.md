@@ -80,3 +80,4 @@ It looks for an line in the configuration file as follows. In this example the t
 | 1.1.0 | <ul><li>Moved timer to separate thread</li><li>Using blocking calls for gpio changes and timer</li></ul> |
 | 1.1.1 | <ul><li>Some minor Cppcheck suggested changes</li><li>Use non-member begin and end functions for collections</li></ul> |
 | 1.1.2 | <ul><li>User sigaction rather than signal to set signal handler</li></ul> |
+| 1.1.3 | <ul><li>Some more minor Cppchecck suggested changes. Added Cppcheck to the build process if installed</li></ul> |

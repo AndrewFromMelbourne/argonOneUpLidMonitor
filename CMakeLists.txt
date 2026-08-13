@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.12)
-project(argonOneUpLidMonitor VERSION 1.1.2 LANGUAGES CXX)
+project(argonOneUpLidMonitor VERSION 1.1.3 LANGUAGES CXX)
 
 #--------------------------------------------------------------------------
 
@@ -43,6 +43,28 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address,leak,undefined")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address,leak,undefined")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address,leak,undefined")
+endif()
+
+#--------------------------------------------------------------------------
+
+find_program(CPPCHECK_EXECUTABLE NAMES cppcheck REQUIRED)
+
+if (CPPCHECK_EXECUTABLE)
+    message(STATUS "cppcheck found. Static analysis will be performed at compile time.")
+    set(CMAKE_CXX_CPPCHECK
+        "${CPPCHECK_EXECUTABLE}"
+        "--check-level=exhaustive"
+        "--enable=all"
+        "--force"
+        "--inconclusive"
+        "--std=c++23"
+        "--quiet"
+        "--suppress=checkersReport"
+        "--suppress=functionStatic"
+        "--suppress=localMutex"
+        "--suppress=missingIncludeSystem"
+        "--suppress=unmatchedSuppression"
+        "--suppress=unusedFunction")
 endif()
 
 #--------------------------------------------------------------------------

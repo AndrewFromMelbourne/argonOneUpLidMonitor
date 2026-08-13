@@ -74,8 +74,8 @@ private:
     void createShutdownThread();
     void destroyShutdownThread();
 
-    std::string getHostname();
-    std::chrono::seconds getShutdownTimeout();
+    std::string getHostname() const noexcept;
+    std::chrono::seconds getShutdownTimeout() const noexcept;
     void printUsage(std::ostream& stream) const;
     void shutdownTimer(std::stop_token stopToken);
 
